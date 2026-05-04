@@ -82,16 +82,19 @@ Print the selection menu, then use **ScheduleWakeup** to implement a real 60-sec
 回复数字选择模型，或等待 60s 自动使用 small：
 ```
 
-2. **Schedule a 60-second wakeup** using the `ScheduleWakeup` tool (minimum allowed delay is 60s):
+2. **Schedule a 60-second wakeup** using the `ScheduleWakeup` tool. **Record the returned job ID** for later cancellation. The prompt must be self-contained with URL, title, duration, and language so the wakeup can proceed autonomously:
 
 ```
-ScheduleWakeup(delaySeconds=60, reason="model selection timeout", prompt="用户未选择模型，超时。使用默认 small 模型继续转录。")
+ScheduleWakeup(delaySeconds=60, reason="model selection timeout", prompt="用户未选择模型，超时。使用默认 small 模型（mlx-community/whisper-small-mlx）继续转录。视频URL: <URL>，标题: <title>，时长约<duration>秒，中文音频。请执行 Step 3：下载音频并转录。")
+// Returns: {"id": "<WAKEUP_JOB_ID>", ...} — save this ID
 ```
 
-3. **Wait for user response.** Two outcomes:
-   - **User replies with `1`-`5`** → map to the corresponding model, the ScheduleWakeup becomes irrelevant (it won't fire mid-query). Proceed with chosen model.
-   - **User replies with anything else** → treat as `small`
-   - **No reply within 60s** → ScheduleWakeup fires (REPL is idle while waiting), injecting a prompt that tells Claude to proceed with `small`
+3. **Wait for user response.** Three outcomes:
+   - **User replies with `1`-`5`** → **IMMEDIATELY cancel the wakeup** with `CronDelete(id="<WAKEUP_JOB_ID>")`, then map to the corresponding model and proceed.
+   - **User replies with anything else** → cancel wakeup, treat as `small`
+   - **No reply within 60s** → ScheduleWakeup fires, injecting a prompt that tells Claude to proceed with `small`
+
+**CRITICAL: Always cancel the wakeup when the user manually selects a model.** Otherwise the wakeup will fire later (after the next idle period) and inject a stale "timeout" prompt that confuses the next turn. Use `CronDelete` with the job ID returned by `ScheduleWakeup`.
 
 **Model map:**
 - `1` → `MLX_MODEL="mlx-community/whisper-tiny-mlx"`
@@ -201,5 +204,5 @@ Example: `./video-to-md/20260504_纳瓦尔_性张力.md`
 3. **mlx-whisper model download** — First use of a model downloads ~500MB-3GB from HuggingFace. Warn the user if uncached. The download is one-time; subsequent runs are instant.
 4. **openai-whisper as fallback** — If mlx-whisper fails (network/auth), fall back to `openai-whisper` with locally cached models at `~/.cache/whisper/`.
 5. **Background vs foreground** — Short videos (<10 min): run transcription in foreground for live progress. Long videos: run in background, use `TaskOutput` to relay progress to user.
-6. **Model selection timeout** — Use `ScheduleWakeup(delaySeconds=60)` (the tool-enforced minimum) to auto-proceed after 60s of user inactivity. Do NOT use `sleep` loops, `read -t`, or background countdown processes — none of these work because Claude's conversation model is synchronous and Bash has no terminal stdin. ScheduleWakeup fires when the REPL is idle (waiting for input), which is exactly the state we need.
+6. **Model selection timeout** — Use `ScheduleWakeup(delaySeconds=60)` (the tool-enforced minimum) to auto-proceed after 60s of user inactivity. Do NOT use `sleep` loops, `read -t`, or background countdown processes — none of these work because Claude's conversation model is synchronous and Bash has no terminal stdin. ScheduleWakeup fires when the REPL is idle (waiting for input), which is exactly the state we need. **Always cancel the wakeup with `CronDelete` when the user manually selects a model** — otherwise the stale wakeup fires on the next idle turn and injects a confusing "timeout" message.
 7. **Truncated audio downloads** — YouTube may serve incomplete audio streams when yt-dlp's JS challenge solver fails. The download reports success but the file is only a fraction of the expected size/duration. Always: (a) use `--remote-components ejs:github` in the download command, and (b) verify with `ffprobe` that the actual audio duration matches the expected duration from metadata. Mismatch > 3s → delete and re-download. See the Step 3 verification block for the exact commands.
