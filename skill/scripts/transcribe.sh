@@ -26,7 +26,8 @@ OUTFILE="$OUTDIR/$VIDEO_ID.txt"
 
 echo "=== Step 1: Downloading audio ==="
 # Download audio-only stream directly (no --extract-audio or --audio-format needed)
-yt-dlp -f "bestaudio" --no-playlist -o "$OUTDIR/$VIDEO_ID.%(ext)s" "$URL"
+# --remote-components ejs:github prevents truncated downloads from JS challenge failures
+yt-dlp -f "bestaudio" --no-playlist --remote-components ejs:github -o "$OUTDIR/$VIDEO_ID.%(ext)s" "$URL"
 
 # Find the downloaded file (extension varies: webm, m4a, opus)
 AUDIO_FILE=$(ls "$OUTDIR/$VIDEO_ID".* 2>/dev/null | grep -v '.txt$' | head -1) || true
@@ -35,6 +36,10 @@ if [ -z "$AUDIO_FILE" ]; then
     exit 1
 fi
 echo "Audio: $AUDIO_FILE ($(du -h "$AUDIO_FILE" | cut -f1))"
+
+# Verify audio is complete (not truncated)
+ACTUAL_DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$AUDIO_FILE")
+echo "Audio duration: ${ACTUAL_DURATION}s"
 
 echo "=== Step 2: Transcribing ==="
 if pip show mlx-whisper > /dev/null 2>&1; then
@@ -52,7 +57,8 @@ else
     [ -n "$TXT_FILE" ] && [ "$TXT_FILE" != "$OUTFILE" ] && mv "$TXT_FILE" "$OUTFILE"
 fi
 
-rm -f "$AUDIO_FILE" "$OUTDIR/$VIDEO_ID.m4a"
+# Clean up audio file (transcription txt left for caller to process then delete)
+rm -f "$AUDIO_FILE"
 
 if [ -f "$OUTFILE" ]; then
     LINES=$(wc -l < "$OUTFILE")

@@ -18,6 +18,25 @@ Verify: `which deno yt-dlp ffmpeg && pip show mlx-whisper 2>/dev/null | grep '^N
 
 **Audio format:** Download the audio-only stream directly (`-f bestaudio`). mlx-whisper reads webm/opus natively — no `--extract-audio --audio-format mp3` conversion needed.
 
+## Parallel Processing
+
+When multiple video URLs are provided, process them concurrently with unique identifiers to avoid file conflicts:
+
+- **Video ID marker**: Extract the 11-character YouTube ID from each URL with `grep -oE '[A-Za-z0-9_-]{11}'`
+- **Audio files**: `/tmp/video_<VIDEO_ID>.%(ext)s` — each video's audio is isolated
+- **Transcript files**: `/tmp/whisper_output/<VIDEO_ID>.txt` — each transcript is isolated
+- **Cleanup**: Delete audio and transcript temp files after the final markdown is saved
+
+Workflow for N videos:
+1. **Gather metadata** for all URLs in parallel (single batch of `yt-dlp --skip-download`)
+2. **Choose one model** for all videos with a single selection prompt
+3. **Download audio** for all videos in parallel (unique filenames, no conflicts)
+4. **Transcribe** all videos in parallel (unique output files, no conflicts)
+5. **Process transcripts** sequentially to generate each markdown
+6. **Clean up** all temp audio and transcript files
+
+For a single video, the same identifiable naming applies — it ensures no collision with past or future runs.
+
 ## Transcription Engine Selection
 
 ### Primary: mlx-whisper (Apple GPU, fastest)
@@ -43,6 +62,14 @@ Runs CPU FP32 — about **3-4x slower** than mlx-whisper. Only use if mlx-whispe
 ## Workflow
 
 ### Step 1: Gather metadata
+
+Extract the video ID from the URL for use as a unique file marker throughout the workflow:
+
+```bash
+VIDEO_ID=$(echo "<URL>" | grep -oE '[A-Za-z0-9_-]{11}' | head -1)
+```
+
+Gather metadata (for multiple URLs, run these in parallel per URL):
 
 ```bash
 yt-dlp --skip-download --print "%(title)s\n---\n%(description)s\n---\n%(channel)s\n---\n%(duration)s\n---\n%(upload_date)s" "<URL>"
@@ -112,14 +139,14 @@ For Bilibili / Chinese title → auto `zh` language, no need to ask.
 **CRITICAL — always include `--remote-components ejs:github`**: Without this flag, yt-dlp's JS challenge solver may fail silently, causing YouTube to serve a **truncated audio stream** (e.g., only 9MB of a 23MB file, resulting in 10 minutes of a 25-minute video). The `ejs:github` component provides the solver script needed for complete, unthrottled downloads.
 
 ```bash
-yt-dlp -f "bestaudio" --no-playlist --remote-components ejs:github -o "/tmp/video.%(ext)s" "<URL>"
-# outputs: /tmp/video.webm (or .m4a)
+yt-dlp -f "bestaudio" --no-playlist --remote-components ejs:github -o "/tmp/video_${VIDEO_ID}.%(ext)s" "<URL>"
+# outputs: /tmp/video_CYzQnkw99pQ.webm (or .m4a)
 ```
 
 Find the downloaded file and set `AUDIO_FILE`:
 
 ```bash
-AUDIO_FILE=$(ls /tmp/video.* 2>/dev/null | grep -v txt | head -1)
+AUDIO_FILE=$(ls /tmp/video_${VIDEO_ID}.* 2>/dev/null | grep -v txt | head -1)
 ```
 
 **MANDATORY — verify audio is complete** by checking the actual duration against the expected duration from Step 1. YouTube throttling/truncation can produce partial files without yt-dlp reporting an error. Tolerance: ±3 seconds.
@@ -135,7 +162,7 @@ If the duration mismatch exceeds 3 seconds, delete the partial file and re-downl
 Transcribe with the bundled `_transcribe_mlx.py` script. Check if the model is cached first — if not, warn about one-time download. Then run:
 
 ```bash
-python3 <path-to-skill>/scripts/_transcribe_mlx.py "$AUDIO_FILE" /tmp/whisper_output/video.txt "$MLX_MODEL" zh
+python3 <path-to-skill>/scripts/_transcribe_mlx.py "$AUDIO_FILE" "/tmp/whisper_output/${VIDEO_ID}.txt" "$MLX_MODEL" zh
 ```
 
 The script takes 4 positional args: `<audio_file> <output_file> <model> <language>`. It supports webm, m4a, mp3, and any format ffmpeg can read.
@@ -152,8 +179,16 @@ The script takes 4 positional args: `<audio_file> <output_file> <model> <languag
 After completion verify:
 
 ```bash
-wc -l /tmp/whisper_output/video.txt
+wc -l /tmp/whisper_output/${VIDEO_ID}.txt
 ```
+
+After the markdown is saved (Step 5), clean up all temp files:
+
+```bash
+rm -f /tmp/video_${VIDEO_ID}.* /tmp/whisper_output/${VIDEO_ID}.txt
+```
+
+For multi-video runs, clean up after all markdown files are saved to keep transcripts available for cross-reference during processing.
 
 ### Step 4: Read and organize the transcript
 
@@ -206,3 +241,4 @@ Example: `./video-to-md/20260504_纳瓦尔_性张力.md`
 5. **Background vs foreground** — Short videos (<10 min): run transcription in foreground for live progress. Long videos: run in background, use `TaskOutput` to relay progress to user.
 6. **Model selection timeout** — Use `ScheduleWakeup(delaySeconds=60)` (the tool-enforced minimum) to auto-proceed after 60s of user inactivity. Do NOT use `sleep` loops, `read -t`, or background countdown processes — none of these work because Claude's conversation model is synchronous and Bash has no terminal stdin. ScheduleWakeup fires when the REPL is idle (waiting for input), which is exactly the state we need. **Always cancel the wakeup with `CronDelete` when the user manually selects a model** — otherwise the stale wakeup fires on the next idle turn and injects a confusing "timeout" message.
 7. **Truncated audio downloads** — YouTube may serve incomplete audio streams when yt-dlp's JS challenge solver fails. The download reports success but the file is only a fraction of the expected size/duration. Always: (a) use `--remote-components ejs:github` in the download command, and (b) verify with `ffprobe` that the actual audio duration matches the expected duration from metadata. Mismatch > 3s → delete and re-download. See the Step 3 verification block for the exact commands.
+8. **Stale temp files from previous runs** — `/tmp/video.webm` or `/tmp/whisper_output/video.txt` may exist from a prior session. Using video-ID-based filenames (`/tmp/video_<VIDEO_ID>.*`) eliminates this conflict. Always verify `ffprobe` duration against expected metadata — if a stale file matches the current video ID but has the wrong duration, `rm` it before re-downloading.
