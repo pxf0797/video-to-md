@@ -98,37 +98,37 @@ Print the selection menu, then use **ScheduleWakeup** to implement a real 60-sec
 1. **Print the menu** as text output with estimated times:
 
 ```
-选择转录模型（视频约 X 分钟，60s 无操作自动选 small）：
+选择转录模型（视频约 X 分钟，60s 无操作自动选 large-v3）：
 
 1) tiny           — ~40x 实时，~Xs
-2) small（推荐）   — ~10x 实时，~Xs，默认
+2) small          — ~10x 实时，~Xs
 3) medium         — ~5x 实时，~Xs
 4) large-v3-turbo — ~3x 实时，~Xs
-5) large-v3       — ~2x 实时，~Xs
+5) large-v3（推荐）— ~2x 实时，~Xs，默认
 
-回复数字选择模型，或等待 60s 自动使用 small：
+回复数字选择模型，或等待 60s 自动使用 large-v3：
 ```
 
 2. **Schedule a 60-second wakeup** using the `ScheduleWakeup` tool. **Record the returned job ID** for later cancellation. The prompt must be self-contained with URL, title, duration, and language so the wakeup can proceed autonomously:
 
 ```
-ScheduleWakeup(delaySeconds=60, reason="model selection timeout", prompt="用户未选择模型，超时。使用默认 small 模型（mlx-community/whisper-small-mlx）继续转录。视频URL: <URL>，标题: <title>，时长约<duration>秒，中文音频。请执行 Step 3：下载音频并转录。")
+ScheduleWakeup(delaySeconds=60, reason="model selection timeout", prompt="用户未选择模型，超时。使用默认 large-v3 模型（mlx-community/whisper-large-v3-mlx）继续转录。视频URL: <URL>，标题: <title>，时长约<duration>秒，中文音频。请执行 Step 3：下载音频并转录。")
 // Returns: {"id": "<WAKEUP_JOB_ID>", ...} — save this ID
 ```
 
 3. **Wait for user response.** Three outcomes:
    - **User replies with `1`-`5`** → **IMMEDIATELY cancel the wakeup** with `CronDelete(id="<WAKEUP_JOB_ID>")`, then map to the corresponding model and proceed.
-   - **User replies with anything else** → cancel wakeup, treat as `small`
-   - **No reply within 60s** → ScheduleWakeup fires, injecting a prompt that tells Claude to proceed with `small`
+   - **User replies with anything else** → cancel wakeup, treat as `large-v3`
+   - **No reply within 60s** → ScheduleWakeup fires, injecting a prompt that tells Claude to proceed with `large-v3`
 
 **CRITICAL: Always cancel the wakeup when the user manually selects a model.** Otherwise the wakeup will fire later (after the next idle period) and inject a stale "timeout" prompt that confuses the next turn. Use `CronDelete` with the job ID returned by `ScheduleWakeup`.
 
 **Model map:**
 - `1` → `MLX_MODEL="mlx-community/whisper-tiny-mlx"`
-- `2` or timeout/any other reply → `MLX_MODEL="mlx-community/whisper-small-mlx"`
+- `2` → `MLX_MODEL="mlx-community/whisper-small-mlx"`
 - `3` → `MLX_MODEL="mlx-community/whisper-medium-mlx"`
 - `4` → `MLX_MODEL="mlx-community/whisper-large-v3-turbo"` (note: no `-mlx` suffix)
-- `5` → `MLX_MODEL="mlx-community/whisper-large-v3-mlx"`
+- `5` or timeout/any other reply → `MLX_MODEL="mlx-community/whisper-large-v3-mlx"`
 
 For Bilibili / Chinese title → auto `zh` language, no need to ask.
 

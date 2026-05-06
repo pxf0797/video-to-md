@@ -1,7 +1,7 @@
 #!/bin/bash
 # Download audio and transcribe with mlx-whisper (Apple GPU accelerated)
 # Usage: ./transcribe.sh <video-url> [model] [language]
-#   model: tiny, small (default), medium, large-v3-turbo, large-v3
+#   model: tiny, small, medium, large-v3-turbo, large-v3 (default)
 #   NOTE: large-v3-turbo uses 'whisper-large-v3-turbo' (no -mlx suffix)
 #   language: zh (default), en, etc.
 # Falls back to openai-whisper if mlx-whisper is unavailable.
@@ -9,7 +9,7 @@
 set -e
 
 URL="${1:?Usage: $0 <video-url> [model] [language]}"
-MODEL="${2:-small}"
+MODEL="${2:-large-v3}"
 LANG="${3:-zh}"
 
 # large-v3-turbo has no -mlx suffix (exception to naming pattern)
